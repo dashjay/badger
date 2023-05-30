@@ -41,6 +41,8 @@ func (u *uint64Heap) Pop() interface{} {
 // mark contains one of more indices, along with a done boolean to indicate the
 // status of the index: begin or done. It also contains waiters, who could be
 // waiting for the watermark to reach >= a certain index.
+// mark 包含很多 indices（构成一个堆），和一个用于指示该 index 的 bool 值：开始或者已经结束了。
+// 也包含了很多 waiters，用来等水位线到达一个指定的 index。
 type mark struct {
 	// Either this is an (index, waiter) pair or (index, done) or (indices, done).
 	index   uint64

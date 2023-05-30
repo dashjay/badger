@@ -147,6 +147,9 @@ func (o *oracle) hasConflict(txn *Txn) bool {
 		// This change assumes linearizability. Lack of linearizability could
 		// cause the read ts of a new txn to be lower than the commit ts of
 		// a txn before it (@mrjn).
+		// 如果 commitedTxn 比 txn.readts 表示提交成功在次事物开始之前。
+		// 我们没必要检查冲突，在这种情况下。
+		// 这修改假设数据库是线性操作的。非线性可能导致新的 txn 的读时间比一个在它之前的 txn 的提交时间早于。
 		if committedTxn.ts <= txn.readTs {
 			continue
 		}
@@ -165,6 +168,7 @@ func (o *oracle) newCommitTs(txn *Txn) (uint64, bool) {
 	o.Lock()
 	defer o.Unlock()
 
+	// 检查 key 的冲突
 	if o.hasConflict(txn) {
 		return 0, true
 	}
@@ -247,6 +251,7 @@ func (o *oracle) doneCommit(cts uint64) {
 }
 
 // Txn represents a Badger transaction.
+// 提交 Txn 的流程：https://camo.githubusercontent.com/da86c0be187f0fda22650d51a8ab0c6d920242cb645fce97667c1b51282b5ad3/68747470733a2f2f7869616f7275692d63632e6f73732d636e2d68616e677a686f752e616c6979756e63732e636f6d2f696d616765732f3230323330322f3230323330323237313132383539392e706e67
 type Txn struct {
 	readTs   uint64
 	commitTs uint64
@@ -399,6 +404,7 @@ func (txn *Txn) modify(e *Entry) error {
 	// If a duplicate entry was inserted in managed mode, move it to the duplicate writes slice.
 	// Add the entry to duplicateWrites only if both the entries have different versions. For
 	// same versions, we will overwrite the existing entry.
+	// 写过多次
 	if oldEntry, ok := txn.pendingWrites[string(e.Key)]; ok && oldEntry.version != e.version {
 		txn.duplicateWrites = append(txn.duplicateWrites, oldEntry)
 	}
@@ -641,22 +647,25 @@ func (txn *Txn) commitPrecheck() error {
 
 // Commit commits the transaction, following these steps:
 //
-// 1. If there are no writes, return immediately.
+// 1. If there are no writes, return immediately. // 如果没有任何写，直接返回
 //
-// 2. Check if read rows were updated since txn started. If so, return ErrConflict.
+// 2. Check if read rows were updated since txn started. If so, return ErrConflict. // 检查读过的行在开始后是否更新过，如果是，则返回冲突
 //
-// 3. If no conflict, generate a commit timestamp and update written rows' commit ts.
+// 3. If no conflict, generate a commit timestamp and update written rows' commit ts. // 如果没有冲突，生成一个提交时间，并且更新写入行的提交时间。
 //
-// 4. Batch up all writes, write them to value log and LSM tree.
+// 4. Batch up all writes, write them to value log and LSM tree. // 打包所有写入，把他们值写入 LSM tree 当中
 //
 // 5. If callback is provided, Badger will return immediately after checking
 // for conflicts. Writes to the database will happen in the background.  If
 // there is a conflict, an error will be returned and the callback will not
 // run. If there are no conflicts, the callback will be called in the
 // background upon successful completion of writes or any error during write.
+// 如果有 callback 需要做，badger 会在检查冲突后立刻返回。后台写入数据库。如果有冲突，会将错误返回并且回调不再执行。
+// 如果没有冲突，回调会在后台被调用，如果写入成功或者在写入之间发生错误。
 //
 // If error is nil, the transaction is successfully committed. In case of a non-nil error, the LSM
 // tree won't be updated, so there's no need for any rollback.
+// 如果 error 不为空，transaction 被成功执行。如果遇到一个非空 error，LSM tree 没必要被更新，因此不需要做任何的回滚。
 func (txn *Txn) Commit() error {
 	// txn.conflictKeys can be zero if conflict detection is turned off. So we
 	// should check txn.pendingWrites.

@@ -60,6 +60,7 @@ func acquireDirectoryLock(dirPath string, pidFileName string, readOnly bool) (
 		opts = unix.LOCK_SH | unix.LOCK_NB
 	}
 
+	// 1. flock the dir first
 	err = unix.Flock(int(f.Fd()), opts)
 	if err != nil {
 		f.Close()

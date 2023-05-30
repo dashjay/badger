@@ -39,9 +39,14 @@ import (
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/table"
 	"github.com/dgraph-io/badger/v4/y"
-	"github.com/dgraph-io/ristretto"
+	"github.com/dgraph-io/ristretto" // why use ristretto: https://dgraph.io/blog/post/introducing-ristretto-high-perf-go-cache
 	"github.com/dgraph-io/ristretto/z"
 )
+
+/*
+	1. what is LSM tree: https://dev.to/creativcoder/what-is-a-lsm-tree-3d75
+	2. mysql 处理事物级别的冲突必须串行化，pg 采用了 SSI(Serializable Snapshot Isolation) 方案，此方案在 badger 中也有。
+*/
 
 var (
 	badgerPrefix = []byte("!badger!")       // Prefix for internal keys used by badger.
@@ -228,6 +233,7 @@ func Open(opt Options) (*DB, error) {
 		}
 	}
 
+	// Manifest 用来组织结构使用的.
 	manifestFile, manifest, err := openOrCreateManifestFile(opt)
 	if err != nil {
 		return nil, err
