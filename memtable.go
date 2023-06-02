@@ -193,6 +193,7 @@ func (mt *memTable) Put(key []byte, value y.ValueStruct) error {
 	if mt.wal != nil {
 		// If WAL exceeds opt.ValueLogFileSize, we'll force flush the memTable. See logic in
 		// ensureRoomForWrite.
+		// mmap used
 		if err := mt.wal.writeEntry(mt.buf, entry, mt.opt); err != nil {
 			return y.Wrapf(err, "cannot write entry to WAL file")
 		}

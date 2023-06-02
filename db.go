@@ -187,6 +187,7 @@ func checkAndSetOptions(opt *Options) error {
 }
 
 // Open returns a new DB object.
+// 写流程如图：https://camo.githubusercontent.com/aba1070f5a44f33454b114aad613b77dcda96eb7ec56b22a3cad804de6e7288f/68747470733a2f2f7869616f7275692d63632e6f73732d636e2d68616e677a686f752e616c6979756e63732e636f6d2f696d616765732f3230323330332f3230323330333031313030373032362e706e67
 func Open(opt Options) (*DB, error) {
 	if err := checkAndSetOptions(&opt); err != nil {
 		return nil, err
@@ -714,12 +715,15 @@ func (db *DB) getMemTables() ([]*memTable, func()) {
 
 // get returns the value in memtable or disk for given key.
 // Note that value will include meta byte.
+// get 为给定的 key 从 memtable 或者 disk 中找到对应的 value.
 //
 // IMPORTANT: We should never write an entry with an older timestamp for the same key, We need to
 // maintain this invariant to search for the latest value of a key, or else we need to search in all
 // tables and find the max version among them.  To maintain this invariant, we also need to ensure
 // that all versions of a key are always present in the same table from level 1, because compaction
 // can push any table down.
+// 重要：对于同一个 key，我们应该从来不写一个带有 older timestamp 的 entry ，我们需要维护这个不变量来搜索查找最近的 key 对应的 value，
+// 否则我们需要再所有表中找到最大的版本。为了维护这个不变量，我们也需要保证所有版本的 key 都存在，
 //
 // Update(23/09/2020) - We have dropped the move key implementation. Earlier we
 // were inserting move keys to fix the invalid value pointers but we no longer
@@ -770,6 +774,7 @@ func (db *DB) writeToLSM(b *request) error {
 
 	for i, entry := range b.Entries {
 		var err error
+		// 查看是否是大 value
 		if entry.skipVlogAndSetThreshold(db.valueThreshold()) {
 			// Will include deletion / tombstone case.
 			err = db.mt.Put(entry.Key,
@@ -779,6 +784,9 @@ func (db *DB) writeToLSM(b *request) error {
 					// to be retrieved during iterator prefetch. `bitValuePointer` is only
 					// known to be set in write to LSM when the entry is loaded from a backup
 					// with lower ValueThreshold and its value was stored in the value log.
+					// 确保 value 指针 flag 被移除，否则 value 会在迭代器预读的时候检索失败。`bitValuePointer` 仅仅是
+					// 需要在写到 LSM 的时候被设置，当 entry 从备份（带有更低的 valueThreshold）中被读取时，然后它的 value
+					// 被存储在 value log 中。 // TODO 暂未理解
 					Meta:      entry.meta &^ bitValuePointer,
 					UserMeta:  entry.UserMeta,
 					ExpiresAt: entry.ExpiresAt,
@@ -816,7 +824,8 @@ func (db *DB) writeRequests(reqs []*request) error {
 		}
 	}
 	db.opt.Debugf("writeRequests called. Writing to value log")
-	err := db.vlog.write(reqs)
+	// 写入的时候相对简单，但更新和删除操作就显得繁琐了, 因为后面还涉及到 vlog 空间整理和 gc 回收。
+	err := db.vlog.write(reqs) // 大文件写入 vlog
 	if err != nil {
 		done(err)
 		return err
@@ -832,6 +841,8 @@ func (db *DB) writeRequests(reqs []*request) error {
 		}
 		count += len(b.Entries)
 		var i uint64
+		// 看是否有空间存入该 key
+		// 可不可以不轮询？，好像似乎必须轮询
 		for err = db.ensureRoomForWrite(); err == errNoRoom; err = db.ensureRoomForWrite() {
 			i++
 			if i%100 == 0 {
@@ -884,8 +895,12 @@ func (db *DB) sendToWriteCh(entries []*Entry) (*request, error) {
 
 func (db *DB) doWrites(lc *z.Closer) {
 	defer lc.Done()
+
+	// 用于进行并发控制
 	pendingCh := make(chan struct{}, 1)
 
+	// 每次写完之后有一个 pendingCh 的排空操作
+	// vlog 是使用 mmap 从磁盘到内存的映射
 	writeRequests := func(reqs []*request) {
 		if err := db.writeRequests(reqs); err != nil {
 			db.opt.Errorf("writeRequests: %v", err)
@@ -897,6 +912,7 @@ func (db *DB) doWrites(lc *z.Closer) {
 	reqLen := new(expvar.Int)
 	y.PendingWritesSet(db.opt.MetricsEnabled, db.opt.Dir, reqLen)
 
+	// 申请内存用于存储一个写请求
 	reqs := make([]*request, 0, 10)
 	for {
 		var r *request
@@ -910,7 +926,9 @@ func (db *DB) doWrites(lc *z.Closer) {
 			reqs = append(reqs, r)
 			reqLen.Set(int64(len(reqs)))
 
+			// 必须开始写了
 			if len(reqs) >= 3*kvWriteChCapacity {
+				// 阻塞下一次写
 				pendingCh <- struct{}{} // blocking.
 				goto writeCase
 			}
@@ -918,6 +936,7 @@ func (db *DB) doWrites(lc *z.Closer) {
 			select {
 			// Either push to pending, or continue to pick from writeCh.
 			case r = <-db.writeCh:
+				// 上一次写已经完成了
 			case pendingCh <- struct{}{}:
 				goto writeCase
 			case <-lc.HasBeenClosed():
@@ -933,6 +952,7 @@ func (db *DB) doWrites(lc *z.Closer) {
 			case r = <-db.writeCh:
 				reqs = append(reqs, r)
 			default:
+				// 等待上一次写完成，然后开始下一次写
 				pendingCh <- struct{}{} // Push to pending before doing a write.
 				writeRequests(reqs)
 				return
@@ -1039,6 +1059,7 @@ type flushTask struct {
 }
 
 // handleFlushTask must be run serially.
+// handleFlushTask flush table from imm -> l0
 func (db *DB) handleFlushTask(ft flushTask) error {
 	// There can be a scenario, when empty memtable is flushed.
 	if ft.mt.sl.Empty() {
@@ -1046,6 +1067,7 @@ func (db *DB) handleFlushTask(ft flushTask) error {
 	}
 
 	bopts := buildTableOptions(db)
+	// 使用 skiplist 的 mmtable 构建 sst
 	builder := buildL0Table(ft, bopts)
 	defer builder.Close()
 
@@ -1070,6 +1092,7 @@ func (db *DB) handleFlushTask(ft flushTask) error {
 		return y.Wrap(err, "error while creating table")
 	}
 	// We own a ref on tbl.
+	// l0 own table
 	err = db.lc.addLevel0Table(tbl) // This will incrRef
 	_ = tbl.DecrRef()               // Releases our ref.
 	return err

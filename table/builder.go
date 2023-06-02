@@ -78,6 +78,9 @@ type bblock struct {
 // Builder is used in building a table.
 type Builder struct {
 	// Typically tens or hundreds of meg. This is for one single file.
+	// Allocator 把一些小的分配空间，合并成更大的 chunks。在内部使用 z.Calloc 来开辟空间。
+	// 一旦空间分配的，内存不会被移动，使用 unsafe 把分配出来的字节转化成其他的结构指针是安全的。
+	// 维护一个 freelist 是很慢的，我们最终决定，我们会释放整个Allocator
 	alloc            *z.Allocator
 	curBlock         *bblock
 	compressedSize   atomic.Uint32
@@ -118,6 +121,7 @@ func (b *Builder) allocate(need int) []byte {
 
 // append appends to curBlock.data
 func (b *Builder) append(data []byte) {
+	// 为数据开辟一块空间，防止自然的堆内存增长
 	dst := b.allocate(len(data))
 	y.AssertTrue(len(data) == copy(dst, data))
 }

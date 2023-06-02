@@ -46,6 +46,8 @@ func (p valuePointer) IsZero() bool {
 }
 
 // Encode encodes Pointer into byte buffer.
+// 原来 golang 里面也可以做这个操作，太神奇了
+// 可以使用 unsafe 将结构直接转化为某对象的指针，然后取值放置。
 func (p valuePointer) Encode() []byte {
 	b := make([]byte, vptrSize)
 	// Copy over the content from p to b.

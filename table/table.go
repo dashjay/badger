@@ -337,6 +337,7 @@ func OpenInMemoryTable(data []byte, id uint64, opt *Options) (*Table, error) {
 	// Caller is given one reference.
 	t.ref.Store(1)
 
+	// 找到最大最小的 key
 	if err := t.initBiggestAndSmallest(); err != nil {
 		return nil, err
 	}
