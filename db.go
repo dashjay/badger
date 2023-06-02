@@ -723,13 +723,17 @@ func (db *DB) getMemTables() ([]*memTable, func()) {
 // that all versions of a key are always present in the same table from level 1, because compaction
 // can push any table down.
 // 重要：对于同一个 key，我们应该从来不写一个带有 older timestamp 的 entry ，我们需要维护这个不变量来搜索查找最近的 key 对应的 value，
-// 否则我们需要再所有表中找到最大的版本。为了维护这个不变量，我们也需要保证所有版本的 key 都存在，
+// 否则我们需要再所有表中找到最大的版本。为了维护这个不变量，我们也需要保证所有版本的 key 都在同一个 table 当中，从 level 1 开始，因为
+// 紧凑会推倒任何表。
 //
 // Update(23/09/2020) - We have dropped the move key implementation. Earlier we
 // were inserting move keys to fix the invalid value pointers but we no longer
 // do that. For every get("fooX") call where X is the version, we will search
 // for "fooX" in all the levels of the LSM tree. This is expensive but it
 // removes the overhead of handling move keys completely.
+// 我们已经移除了 move key 实现。更早先我们曾经插入更多的key来修复 invalid 值指针，但是我们不再这样做。
+// 对所有的 get("fooX") 调用，X 是 version，我们会搜索 'fooX' 在所有层的 LSM 树。这是开销巨大但是他
+// 完全移除了处理 move keys 的额外开销。（会导致读穿所有 layer呀，浪费咩？）
 func (db *DB) get(key []byte) (y.ValueStruct, error) {
 	if db.IsClosed() {
 		return y.ValueStruct{}, ErrDBClosed
@@ -742,12 +746,14 @@ func (db *DB) get(key []byte) (y.ValueStruct, error) {
 
 	y.NumGetsAdd(db.opt.MetricsEnabled, 1)
 	for i := 0; i < len(tables); i++ {
+		// 从 table 里获取
 		vs := tables[i].sl.Get(key)
 		y.NumMemtableGetsAdd(db.opt.MetricsEnabled, 1)
 		if vs.Meta == 0 && vs.Value == nil {
 			continue
 		}
 		// Found the required version of the key, return immediately.
+		// 版本匹配~
 		if vs.Version == version {
 			return vs, nil
 		}

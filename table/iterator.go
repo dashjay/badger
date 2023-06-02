@@ -281,7 +281,7 @@ func (itr *Iterator) seekFrom(key []byte, whence int) {
 	if idx == 0 {
 		// The smallest key in our table is already strictly > key. We can return that.
 		// This is like a SeekToFirst.
-		itr.seekHelper(0, key)
+		itr.seekHelper(0, key) // 找不到合适的就返回 seek to fiest
 		return
 	}
 

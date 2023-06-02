@@ -246,6 +246,8 @@ func (s *levelHandler) getTableForKey(key []byte) ([]*table.Table, func() error)
 		// For level 0, we need to check every table. Remember to make a copy as s.tables may change
 		// once we exit this function, and we don't want to lock s.tables while seeking in tables.
 		// CAUTION: Reverse the tables.
+		// 对于 Level 0来说，我们需要检查所有的表。记住做一个 s.tables 的拷贝，因为 s.tables 可能会
+		// 改变，当我们退出这个函数的时候，我们不想要锁住整个 tabls 当我们查找表的时候
 		out := make([]*table.Table, 0, len(s.tables))
 		for i := len(s.tables) - 1; i >= 0; i-- {
 			out = append(out, s.tables[i])
@@ -261,11 +263,13 @@ func (s *levelHandler) getTableForKey(key []byte) ([]*table.Table, func() error)
 		}
 	}
 	// For level >= 1, we can do a binary search as key range does not overlap.
+	// 对于 Level >= 1，来说，我们可以做一个二分查找，因为 key 不会重叠。
 	idx := sort.Search(len(s.tables), func(i int) bool {
 		return y.CompareKeys(s.tables[i].Biggest(), key) >= 0
 	})
 	if idx >= len(s.tables) {
 		// Given key is strictly > than every element we have.
+		// 给定的 key 比每一个 table element 都大。
 		return nil, func() error { return nil }
 	}
 	tbl := s.tables[idx]
@@ -275,25 +279,30 @@ func (s *levelHandler) getTableForKey(key []byte) ([]*table.Table, func() error)
 
 // get returns value for a given key or the key after that. If not found, return nil.
 func (s *levelHandler) get(key []byte) (y.ValueStruct, error) {
+	// 这里面对于 level == 0 和 level >= 1 的处理是不同的
 	tables, decr := s.getTableForKey(key)
 	keyNoTs := y.ParseKey(key)
 
 	hash := y.Hash(keyNoTs)
 	var maxVs y.ValueStruct
 	for _, th := range tables {
+		// 先看能不能命中 bloomFilter
 		if th.DoesNotHave(hash) {
 			y.NumLSMBloomHitsAdd(s.db.opt.MetricsEnabled, s.strLevel, 1)
 			continue
 		}
 
+		// 迭代器
 		it := th.NewIterator(0)
 		defer it.Close()
 
 		y.NumLSMGetsAdd(s.db.opt.MetricsEnabled, s.strLevel, 1)
+		// 找到这个 key
 		it.Seek(key)
 		if !it.Valid() {
 			continue
 		}
+		// 确定是同样 key 之后还要看看版本
 		if y.SameKey(key, it.Key()) {
 			if version := y.ParseTs(it.Key()); maxVs.Version < version {
 				maxVs = it.ValueCopy()
